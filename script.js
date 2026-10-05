@@ -24,7 +24,7 @@ let renderedAudioBlob = null;
 let renderedAudioUrl = null;
 let renderedAudioMp3Blob = null;
 let renderedAudioMp3Url = null;
-let activeAudio = null;
+let activeSource = null;
 let decodeCtx = null;
 
 const SPEAKER_COLORS = ['#38BDF8', '#F472B6', '#FBBF24', '#A78BFA', '#34D399', '#FB923C', '#E879F9'];
@@ -391,9 +391,9 @@ function toggleLivePreview() {
 
 function stopLivePreview() {
   isPlayingPreview = false;
-  if (activeAudio) {
-    activeAudio.pause();
-    activeAudio = null;
+  if (activeSource) {
+    try { activeSource.stop(); } catch (e) {}
+    activeSource = null;
   }
   document.getElementById('playIcon').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
   document.getElementById('playBtnText').innerText = 'Preview Live Conversation';
@@ -402,6 +402,9 @@ function stopLivePreview() {
 }
 
 async function startLivePreview() {
+  const ctx = getDecodeContext();
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+
   const text = document.getElementById('conversationInput').value;
   const turns = parseScript(text);
   if (turns.length === 0) return alert('Please write conversation text first.');
@@ -452,32 +455,28 @@ async function playNextPreviewTurn(turns) {
     if (isPlayingPreview) playNextPreviewTurn(turns);
   } catch (err) {
     if (!isPlayingPreview) return;
-    setStatus('error', err.message);
     stopLivePreview();
+    setStatus('error', err.message);
   }
 }
 
 function playBuffer(buffer, rate) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(audioBufferToWav(buffer));
-    const audio = new Audio(url);
-    activeAudio = audio;
-    audio.playbackRate = rate || 1.0;
-    audio.onended = () => {
-      if (activeAudio === audio) activeAudio = null;
-      URL.revokeObjectURL(url);
-      resolve();
+    const ctx = getDecodeContext();
+    const start = () => {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.playbackRate.value = rate || 1.0;
+      src.connect(ctx.destination);
+      activeSource = src;
+      src.onended = () => {
+        if (activeSource === src) activeSource = null;
+        resolve();
+      };
+      src.start();
     };
-    audio.onerror = () => {
-      if (activeAudio === audio) activeAudio = null;
-      URL.revokeObjectURL(url);
-      reject(new Error('Audio playback failed.'));
-    };
-    audio.play().catch(err => {
-      if (activeAudio === audio) activeAudio = null;
-      URL.revokeObjectURL(url);
-      reject(err);
-    });
+    if (ctx.state === 'suspended') ctx.resume().then(start).catch(reject);
+    else start();
   });
 }
 
